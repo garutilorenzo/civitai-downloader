@@ -74,6 +74,7 @@ def extract_id(url: str) -> Optional[str]:
 
 
 def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
+
     headers = {
         'Authorization': f'Bearer {token}',
         'User-Agent': USER_AGENT,
@@ -85,6 +86,7 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
             return response
         https_response = http_response
 
+    url = None
     if model_url_or_id.isdigit():
         url = f'{CIVITAI_BASE_URL}/{model_url_or_id}'
     elif CIVITAI_BASE_URL in model_url_or_id:
@@ -93,10 +95,10 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
         model_id = extract_id(model_url_or_id)
         if model_id:
             url = f'{CIVITAI_BASE_URL}/{model_id}'
-    
+
     if not url:
         raise Exception('Invalid model URL or ID')
-        
+
     request = urllib.request.Request(url, headers=headers)
     opener = urllib.request.build_opener(NoRedirection)
     response = opener.open(request)
@@ -127,22 +129,23 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
             if not filename:
                 raise Exception('Unable to determine filename')
 
-        response = urllib.request.urlopen(redirect_url)
+        # Add headers to the second call
+        redirect_request = urllib.request.Request(redirect_url, headers=headers)
+        response = opener.open(redirect_request)
     elif response.status == 404:
         raise Exception('File not found')
     else:
         raise Exception('No redirect found, something went wrong')
 
     total_size = response.getheader('Content-Length')
-
     if total_size is not None:
         total_size = int(total_size)
 
     output_file = os.path.join(output_path, filename)
     if os.path.isfile(output_file) and os.path.getsize(output_file) > 0:
         print(f'File {output_file} already present on filesystem')
-        return 
-    
+        return
+
     with open(output_file, 'wb') as f:
         downloaded = 0
         start_time = time.time()
@@ -160,7 +163,7 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
             chunk_time = chunk_end_time - chunk_start_time
 
             if chunk_time > 0:
-                speed = len(buffer) / chunk_time / (1024 ** 2)  # Speed in MB/s
+                speed = len(buffer) / chunk_time / (1024 ** 2) # Speed in MB/s
 
             if total_size is not None:
                 progress = downloaded / total_size
