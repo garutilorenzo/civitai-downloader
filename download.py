@@ -130,8 +130,12 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
                 raise Exception('Unable to determine filename')
 
         # Add headers to the second call
-        redirect_request = urllib.request.Request(redirect_url, headers=headers)
-        response = opener.open(redirect_request)
+        try:
+            redirect_request = urllib.request.Request(redirect_url)
+            response = opener.open(redirect_request)
+        except Exception as e:
+            redirect_request = urllib.request.Request(redirect_url, headers=headers)
+            response = opener.open(redirect_request)
     elif response.status == 404:
         raise Exception('File not found')
     else:
