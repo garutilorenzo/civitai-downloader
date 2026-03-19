@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import os, re, sys, time
+import os, re, sys, time, json
 import argparse
 import urllib.request
 import zipfile
@@ -7,12 +7,11 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 from typing import Optional
 
-
 CHUNK_SIZE = 1638400
 TOKEN_FILE = Path.home() / '.civitai' / 'config'
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
 DEFAULT_ENV_NAME = os.getenv('CIVITAI_TOKEN_NAME', 'CIVITAI_TOKEN')
-CIVITAI_BASE_URL = os.getenv('CIVITAI_BASE_URL', 'https://civitai.com/api/download/models')
+CIVITAI_BASE_URL = os.getenv('CIVITAI_BASE_URL', 'https://civitai.com/api')
 
 
 def get_args() -> argparse.Namespace:
@@ -23,7 +22,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         'model_url_or_id',
         type=str,
-        help='CivitAI Download Model ID, eg: 46846'
+        help='Model Version Id or full URL, eg: 46846 or https://civitai.com/models/1234567?modelVersionId=46846'
     )
 
     parser.add_argument(
@@ -73,6 +72,36 @@ def extract_id(url: str) -> Optional[str]:
     return None
 
 
+def get_model_name(model_id: str, headers: dict, url: str) -> str:
+    filename = None
+    if model_id:
+        model_details_req = urllib.request.Request(f'{CIVITAI_BASE_URL}/v1/model-versions/{model_id}', headers=headers)
+        model_details_resp = urllib.request.urlopen(model_details_req)
+        try:
+            json_resp = json.loads(model_details_resp.read().decode('utf-8'))
+            model_files = json_resp['files']
+            primary_file = next((f for f in model_files if f.get('primary')), None)
+            if primary_file:
+                filename = primary_file['name']
+        except Exception as e:
+            print('Cannot retreive model version details from CivitAI API, falling back to filename extraction from URL')
+    
+    if not filename:
+        # Extract filename from the redirect URL
+        parsed_url = urlparse(url)
+        query_params = parse_qs(parsed_url.query)
+        content_disposition = query_params.get('response-content-disposition', [None])[0]
+
+        if content_disposition and 'filename=' in content_disposition:
+            filename = unquote(content_disposition.split('filename=')[1].strip('"'))
+        else:
+            # Fallback: extract filename from URL path
+            path = parsed_url.path
+            if path and '/' in path:
+                filename = path.split('/')[-1]
+    return filename
+
+
 def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
 
     headers = {
@@ -89,14 +118,17 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
     url = None
     initial_response = None
     final_response = None
+    model_id = None
     if model_url_or_id.isdigit():
-        url = f'{CIVITAI_BASE_URL}/{model_url_or_id}'
-    elif CIVITAI_BASE_URL in model_url_or_id:
+        model_id = model_url_or_id
+        url = f'{CIVITAI_BASE_URL}/download/models/{model_id}'
+    elif f'{CIVITAI_BASE_URL}/download/models/' in model_url_or_id:
+        model_id = model_url_or_id.split('/')[-1]
         url = model_url_or_id
     elif 'modelVersionId' in model_url_or_id:
         model_id = extract_id(model_url_or_id)
         if model_id:
-            url = f'{CIVITAI_BASE_URL}/{model_id}'
+            url = f'{CIVITAI_BASE_URL}/download/models/{model_id}'
 
     if not url:
         raise Exception('Invalid model URL or ID')
@@ -112,24 +144,6 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
         if redirect_url.startswith('/'):
             base_url = urlparse(url)
             redirect_url = f"{base_url.scheme}://{base_url.netloc}{redirect_url}"
-
-        # Extract filename from the redirect URL
-        parsed_url = urlparse(redirect_url)
-        query_params = parse_qs(parsed_url.query)
-        content_disposition = query_params.get('response-content-disposition', [None])[0]
-
-        if content_disposition and 'filename=' in content_disposition:
-            filename = unquote(content_disposition.split('filename=')[1].strip('"'))
-        else:
-            # Fallback: extract filename from URL path
-            path = parsed_url.path
-            if path and '/' in path:
-                filename = path.split('/')[-1]
-            else:
-                filename = 'downloaded_file'
-
-            if not filename:
-                raise Exception('Unable to determine filename')
 
         # Add headers to the second call
         redirect_request = urllib.request.Request(redirect_url, headers=headers)
@@ -149,6 +163,11 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
     if total_size is not None:
         total_size = int(total_size)
 
+    filename = get_model_name(model_id, headers, redirect_url if final_response else url)
+    if not filename:
+        raise Exception('Unable to determine filename from CivitAI API or URL')
+
+    print(f'Starting download: {filename}')
     output_file = os.path.join(output_path, filename)
     if os.path.isfile(output_file) and os.path.getsize(output_file) > 0:
         print(f'File {output_file} already present on filesystem')
