@@ -87,6 +87,8 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
         https_response = http_response
 
     url = None
+    initial_response = None
+    final_response = None
     if model_url_or_id.isdigit():
         url = f'{CIVITAI_BASE_URL}/{model_url_or_id}'
     elif CIVITAI_BASE_URL in model_url_or_id:
@@ -101,10 +103,10 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
 
     request = urllib.request.Request(url, headers=headers)
     opener = urllib.request.build_opener(NoRedirection)
-    response = opener.open(request)
+    initial_response = opener.open(request)
 
-    if response.status in [301, 302, 303, 307, 308]:
-        redirect_url = response.getheader('Location')
+    if initial_response.status in [301, 302, 303, 307, 308]:
+        redirect_url = initial_response.getheader('Location')
 
         # Handle relative redirects
         if redirect_url.startswith('/'):
@@ -130,18 +132,20 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
                 raise Exception('Unable to determine filename')
 
         # Add headers to the second call
-        try:
+        redirect_request = urllib.request.Request(redirect_url, headers=headers)
+        final_response = opener.open(redirect_request)
+        if final_response.status == 400:
             redirect_request = urllib.request.Request(redirect_url)
-            response = opener.open(redirect_request)
-        except Exception as e:
-            redirect_request = urllib.request.Request(redirect_url, headers=headers)
-            response = opener.open(redirect_request)
-    elif response.status == 404:
+            final_response = opener.open(redirect_request)
+    elif initial_response.status == 404:
         raise Exception('File not found')
     else:
         raise Exception('No redirect found, something went wrong')
 
-    total_size = response.getheader('Content-Length')
+    # Use final_response if redirect occurred, otherwise use initial_response
+    download_response = final_response if final_response else initial_response
+
+    total_size = download_response.getheader('Content-Length')
     if total_size is not None:
         total_size = int(total_size)
 
@@ -156,7 +160,7 @@ def download_file(model_url_or_id: str, output_path: str, token: str) -> None:
 
         while True:
             chunk_start_time = time.time()
-            buffer = response.read(CHUNK_SIZE)
+            buffer = download_response.read(CHUNK_SIZE)
             chunk_end_time = time.time()
 
             if not buffer:
